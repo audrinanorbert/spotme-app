@@ -1,0 +1,2084 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SPOT-Me WFH Reminder & Cross-Device Sync</title>
+    
+    <!-- PWA & Mobile Meta Tags -->
+    <meta name="theme-color" content="#f43f5e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="SPOT-Me WFH attendance tool with soft pastel aesthetic, persistent real-time multi-device cloud sync, and synchronized alarms.">
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#fff1f2',
+                            100: '#ffe4e6',
+                            200: '#fecdd3',
+                            300: '#fda4af',
+                            400: '#fb7185',
+                            500: '#f43f5e',
+                            600: '#e11d48',
+                            700: '#be123c',
+                            800: '#9f1239',
+                            900: '#881337',
+                            950: '#4c0519'
+                        },
+                        pastel: {
+                            bg: '#fff5f7',
+                            card: '#ffffff',
+                            pink: '#fde8ef',
+                            pinkText: '#881337',
+                            pinkBorder: '#fbcfe8',
+                            rose: '#fce7f3',
+                            roseText: '#9d174d',
+                            roseBorder: '#f472b6',
+                            mint: '#e6f4f1',
+                            mintText: '#135e51',
+                            mintBorder: '#b3e2d8',
+                            lavender: '#f3eefc',
+                            lavenderText: '#593092',
+                            lavenderBorder: '#ddd6fe',
+                            peach: '#fff1e6'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        html, body {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #fda4af;
+            border-radius: 9999px;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+        @keyframes toastIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-toast {
+            animation: toastIn 0.25s ease-out forwards;
+        }
+        @keyframes pulseRing {
+            0% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.6); }
+            70% { transform: scale(1.02); box-shadow: 0 0 0 16px rgba(244, 63, 94, 0); }
+            100% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+        }
+        .animate-pulse-ring {
+            animation: pulseRing 1.5s infinite;
+        }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'spotme-wfh-app';
+        let resolveReady;
+        window.firebaseReadyPromise = new Promise((resolve) => { resolveReady = resolve; });
+
+        async function initFirebase() {
+            try {
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = initializeApp(firebaseConfig);
+                    const db = getFirestore(app);
+                    const auth = getAuth(app);
+
+                    let user = null;
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        const cred = await signInWithCustomToken(auth, __initial_auth_token);
+                        user = cred.user;
+                    } else {
+                        const cred = await signInAnonymously(auth);
+                        user = cred.user;
+                    }
+                    
+                    window.firebaseDb = db;
+                    window.firebaseAuth = auth;
+                    window.firebaseUser = user;
+                    window.firebaseAppId = appId;
+                    window.firestoreDoc = doc;
+                    window.firestoreSetDoc = setDoc;
+                    window.firestoreOnSnapshot = onSnapshot;
+                    
+                    resolveReady(true);
+                    return true;
+                }
+            } catch (e) {
+                console.warn("Firebase initialization note:", e);
+            }
+            resolveReady(false);
+            return false;
+        }
+
+        initFirebase();
+    </script>
+</head>
+<body class="bg-pastel-bg dark:bg-slate-950 text-slate-700 dark:text-slate-200 min-h-full flex flex-col font-sans transition-colors duration-200 selection:bg-brand-200 selection:text-brand-900" onclick="unlockAudioEngineOnce()">
+
+    <!-- Dynamic Toast Notification Banners -->
+    <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 w-11/12 max-w-md pointer-events-none"></div>
+
+    <!-- Active Ringing Alarm Banner Overlay -->
+    <div id="active-alarm-banner" class="fixed inset-x-4 top-4 z-50 hidden max-w-md mx-auto">
+        <div class="bg-gradient-to-r from-brand-600 via-rose-600 to-pink-600 text-white p-4 rounded-3xl shadow-2xl border-2 border-white/40 animate-pulse-ring flex items-center justify-between gap-3">
+            <div class="flex items-center space-x-3">
+                <div class="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shrink-0 text-amber-200">
+                    <i class="fa-solid fa-bell fa-bounce"></i>
+                </div>
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider font-extrabold text-pink-200">REMINDER RINGING NOW!</div>
+                    <div id="alarm-banner-title" class="font-black text-sm text-white">Pengesahan SPOT-Me</div>
+                    <div id="alarm-banner-time" class="text-[11px] font-medium text-rose-100">Scheduled for Today</div>
+                </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+                <button onclick="stopAlarmRinging()" class="px-3 py-2 bg-white/20 hover:bg-white/30 text-white font-bold text-xs rounded-xl backdrop-blur-xs transition">
+                    Silence
+                </button>
+                <button onclick="acknowledgeActiveAlarm()" class="px-3.5 py-2 bg-amber-300 hover:bg-amber-200 text-slate-950 font-black text-xs rounded-xl shadow-md transition">
+                    Done
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header Navigation Bar -->
+    <header class="bg-gradient-to-r from-brand-800 via-rose-700 to-pink-900 dark:bg-slate-950 text-white sticky top-0 z-40 shadow-xs border-b border-brand-600/30">
+        <div class="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-2xl bg-brand-500/30 border border-brand-300/30 flex items-center justify-center text-xl shadow-inner font-black text-brand-100">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                </div>
+                <div>
+                    <h1 class="font-black text-lg tracking-tight leading-none text-white">SPOT-Me WFH</h1>
+                    <p class="text-[11px] text-pink-200 font-medium mt-0.5">Real-Time Multi-Device Sync</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <!-- Dark Mode Toggle Button -->
+                <button onclick="toggleDarkMode()" aria-label="Toggle dark mode" class="w-9 h-9 rounded-xl bg-brand-700/60 dark:bg-slate-800 text-brand-100 hover:text-white flex items-center justify-center transition active:scale-95 border border-brand-500/20">
+                    <i id="dark-icon" class="fa-solid fa-moon text-base"></i>
+                </button>
+
+                <!-- Cloud Sync Status Badge -->
+                <button onclick="switchTab('dashboard')" id="header-sync-badge" class="bg-brand-700/60 hover:bg-brand-600/70 text-brand-100 dark:bg-slate-800 text-xs px-2.5 py-1.5 rounded-xl border border-brand-400/20 flex items-center space-x-1.5 transition active:scale-95">
+                    <i class="fa-solid fa-cloud text-xs text-emerald-300" id="header-sync-icon"></i>
+                    <span id="header-sync-text" class="font-bold text-[11px]">Syncing...</span>
+                </button>
+
+                <!-- Official SPOT-Me Direct Link -->
+                <button onclick="openSpotMePortal()" class="bg-rose-400 hover:bg-rose-500 text-slate-950 font-bold text-xs px-3 py-2 rounded-xl shadow-xs flex items-center space-x-1.5 transition active:scale-95">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                    <span class="hidden sm:inline">Portal</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Body -->
+    <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-5 space-y-5 pb-24">
+
+        <!-- Audio Permission Activation Banner -->
+        <div id="notif-perm-banner" class="bg-pastel-pink border border-pastel-pinkBorder p-4 rounded-2xl flex items-center justify-between gap-3 text-pastel-pinkText dark:bg-rose-950/40 dark:border-rose-800/50 dark:text-rose-200 shadow-xs">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-2xl bg-rose-200/60 dark:bg-rose-900/60 text-rose-900 dark:text-rose-300 flex items-center justify-center shrink-0 font-extrabold text-lg">
+                    <i class="fa-solid fa-volume-high"></i>
+                </div>
+                <div>
+                    <div id="audio-status-title" class="font-extrabold text-xs sm:text-sm">Enable Alarm Chimes & Audio Ringing</div>
+                    <div id="audio-status-sub" class="text-[11px] opacity-90">Tap to unlock browser audio context & allow push alerts.</div>
+                </div>
+            </div>
+            <button onclick="activateAudioAndNotifications()" class="bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs px-3.5 py-2.5 rounded-xl shrink-0 transition shadow-xs flex items-center gap-1.5">
+                <i class="fa-solid fa-bell"></i>
+                <span>Enable Audio</span>
+            </button>
+        </div>
+
+        <!-- Navigation Tab Menu -->
+        <nav class="flex bg-rose-100/60 dark:bg-slate-800/80 p-1 rounded-2xl text-xs font-bold text-slate-600 dark:text-slate-400 gap-1 overflow-x-auto">
+            <button onclick="switchTab('dashboard')" id="tab-btn-dashboard" class="flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 bg-white dark:bg-slate-700 text-brand-700 dark:text-white shadow-xs font-bold">
+                <i class="fa-solid fa-gauge-high"></i>
+                <span>Dashboard</span>
+            </button>
+            <button onclick="switchTab('schedule')" id="tab-btn-schedule" class="flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium">
+                <i class="fa-solid fa-list-check"></i>
+                <span>Schedule</span>
+            </button>
+            <button onclick="switchTab('holidays')" id="tab-btn-holidays" class="flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium">
+                <i class="fa-solid fa-calendar-days"></i>
+                <span>Calendar & Holidays</span>
+            </button>
+            <button onclick="switchTab('history')" id="tab-btn-history" class="flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+                <span>History</span>
+            </button>
+            <button onclick="switchTab('settings')" id="tab-btn-settings" class="flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium">
+                <i class="fa-solid fa-sliders"></i>
+                <span>Settings</span>
+            </button>
+        </nav>
+
+        <!-- TAB 1: DASHBOARD -->
+        <div id="tab-dashboard" class="space-y-5">
+
+            <!-- Real-Time Sync Hub Card with Persistent Device Switcher -->
+            <section class="bg-gradient-to-br from-brand-900 via-rose-900 to-pink-950 text-white rounded-3xl p-5 shadow-xs space-y-3.5 border border-brand-600/30 relative overflow-hidden">
+                <div class="flex items-center justify-between border-b border-brand-600/40 pb-3">
+                    <div class="flex items-center space-x-2.5">
+                        <div class="w-9 h-9 rounded-xl bg-pink-400/20 border border-pink-300/30 flex items-center justify-center text-pink-300">
+                            <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-sm text-white flex items-center gap-1.5">
+                                Real-Time Device Sync
+                                <span class="text-[10px] font-normal text-rose-200 bg-rose-950/60 px-2 py-0.5 rounded-full border border-rose-500/30">Phone + iPad + Laptop</span>
+                            </h3>
+                            <p class="text-[11px] text-pink-200">Pair devices instantly using a 6-digit bucket code</p>
+                        </div>
+                    </div>
+                    <span id="cloud-status-pill" class="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                        ● Connecting...
+                    </span>
+                </div>
+
+                <div class="bg-brand-950/60 p-4 rounded-2xl border border-brand-700/40 space-y-3 text-xs">
+                    <div class="flex justify-between items-center text-[10px] font-bold text-pink-300 uppercase tracking-wider">
+                        <span>Active Shared Bucket Code:</span>
+                        <button onclick="promptUnpairDevice()" class="text-rose-300 hover:text-white underline font-bold">Disconnect Code</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="cloud-sync-code-input" placeholder="e.g. SPOT-8492" class="flex-1 bg-slate-900 border border-brand-600/60 text-pink-300 font-mono font-bold text-base rounded-xl px-3 py-2 outline-none uppercase text-center tracking-wider">
+                        <button onclick="copySyncCodeToClipboard()" title="Copy Sync Code" class="bg-brand-800 hover:bg-brand-700 text-pink-200 px-3 py-2 rounded-xl border border-brand-600/60 transition active:scale-95">
+                            <i class="fa-solid fa-copy text-sm"></i>
+                        </button>
+                        <button onclick="connectCloudSyncCode()" id="sync-action-btn" class="bg-rose-400 hover:bg-rose-300 active:scale-95 text-slate-950 font-black text-xs px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5">
+                            <i class="fa-solid fa-link" id="sync-btn-icon"></i>
+                            <span id="sync-btn-label">Pair Devices</span>
+                        </button>
+                    </div>
+
+                    <!-- Paired Recent Codes Quick Switcher -->
+                    <div id="recent-codes-container" class="pt-2 border-t border-brand-800/60 space-y-1.5 hidden">
+                        <div class="text-[10px] text-pink-200/80 font-bold">Switch to Previous Device Bucket:</div>
+                        <div id="recent-codes-pills" class="flex flex-wrap gap-1.5"></div>
+                    </div>
+
+                    <div class="flex justify-between items-center text-[10px] text-pink-200 pt-1">
+                        <button onclick="generateNewSyncCode()" class="text-rose-300 underline font-bold hover:text-white">Create New Code</button>
+                        <span id="cloud-last-time">Connected</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between text-[11px] text-pink-200 pt-1">
+                    <span>Checkmarks & WFH dates sync live in under 500ms across all paired screens.</span>
+                    <button onclick="openDriveHelpModal()" class="text-rose-300 hover:underline font-bold text-[11px]">
+                        Sync Guide
+                    </button>
+                </div>
+            </section>
+
+            <!-- WFH Quick Toggles Card -->
+            <section class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex items-center justify-between border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <div>
+                        <h2 class="font-black text-slate-800 dark:text-white text-base flex items-center gap-2">
+                            <i class="fa-solid fa-house-laptop text-brand-500 dark:text-brand-400"></i>
+                            Work From Home Mode
+                        </h2>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Activate reminders for specific working days</p>
+                    </div>
+                    <span id="active-reminders-badge" class="text-[11px] font-extrabold bg-pastel-pink dark:bg-brand-950/60 text-pastel-pinkText dark:text-brand-300 px-2.5 py-1 rounded-full border border-pastel-pinkBorder dark:border-brand-800">
+                        0 Scheduled
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <!-- Today Toggle -->
+                    <div class="bg-pink-50/40 dark:bg-slate-800/60 p-4 rounded-2xl border border-pink-100/60 dark:border-slate-700/60 flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-slate-800 dark:text-white text-sm">WFH Today</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 font-medium" id="today-date-label">Today</div>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="wfh-today-toggle" class="sr-only peer" onchange="toggleWFHDate('today')">
+                            <div class="w-14 h-7 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-200 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-brand-500"></div>
+                        </label>
+                    </div>
+
+                    <!-- Tomorrow Toggle -->
+                    <div class="bg-pink-50/40 dark:bg-slate-800/60 p-4 rounded-2xl border border-pink-100/60 dark:border-slate-700/60 flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-slate-800 dark:text-white text-sm">WFH Tomorrow</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 font-medium" id="tomorrow-date-label">Tomorrow</div>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="wfh-tomorrow-toggle" class="sr-only peer" onchange="toggleWFHDate('tomorrow')">
+                            <div class="w-14 h-7 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-200 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-brand-500"></div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Custom Future Date Selector -->
+                <div class="pt-1 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-pastel-pink/50 dark:bg-brand-950/30 p-3.5 rounded-2xl border border-pastel-pinkBorder/60 dark:border-brand-900/40">
+                    <div class="flex items-center space-x-2.5">
+                        <i class="fa-solid fa-calendar-plus text-brand-600 dark:text-brand-300 text-lg"></i>
+                        <span class="text-xs font-bold text-slate-700 dark:text-slate-300">Schedule Future WFH Date:</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input type="date" id="custom-wfh-date-input" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-white text-xs rounded-xl px-3 py-2 font-bold focus:ring-2 focus:ring-brand-400 outline-none">
+                        <button onclick="addCustomWFHDate()" class="bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition shadow-xs">
+                            Add Date
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Active Scheduled Dates Badges -->
+                <div id="active-dates-container" class="flex flex-wrap gap-1.5 pt-1"></div>
+            </section>
+
+            <!-- Next Reminder Countdown Card -->
+            <section id="next-reminder-card" class="bg-gradient-to-br from-brand-800 via-rose-900 to-slate-900 text-white rounded-3xl p-5 shadow-xs space-y-4 relative overflow-hidden border border-brand-600/30">
+                <div class="absolute -right-6 -bottom-6 text-brand-500/10 text-9xl pointer-events-none">
+                    <i class="fa-solid fa-bell"></i>
+                </div>
+
+                <div class="flex items-center justify-between relative z-10">
+                    <span class="text-[11px] font-extrabold uppercase tracking-wider bg-brand-700/60 text-brand-100 px-3 py-1 rounded-full border border-brand-400/30">
+                        Next Reminder Slot
+                    </span>
+                    <span id="countdown-badge" class="text-xs font-mono font-bold text-rose-300">
+                        --:--:--
+                    </span>
+                </div>
+
+                <div class="relative z-10 space-y-1">
+                    <h3 id="next-reminder-title" class="text-xl sm:text-2xl font-black text-white">No Active Reminders</h3>
+                    <p id="next-reminder-subtitle" class="text-xs text-brand-100">Toggle WFH Mode above to schedule automated alerts.</p>
+                </div>
+
+                <!-- Quick Action Buttons -->
+                <div class="pt-2 flex flex-wrap gap-2.5 relative z-10" id="next-reminder-actions">
+                    <button onclick="acknowledgeNextReminder()" class="flex-1 bg-rose-400 hover:bg-rose-500 active:scale-95 text-slate-950 font-extrabold text-xs py-3 px-4 rounded-xl shadow-xs flex items-center justify-center space-x-2 transition">
+                        <i class="fa-solid fa-circle-check text-base"></i>
+                        <span>Mark as Done</span>
+                    </button>
+                    <button onclick="testNotificationSound()" class="bg-brand-700/80 hover:bg-brand-700 text-pink-100 font-bold text-xs py-3 px-4 rounded-xl border border-brand-500/30 flex items-center space-x-1.5 transition active:scale-95">
+                        <i class="fa-solid fa-volume-high"></i>
+                        <span>Test Alarm Sound</span>
+                    </button>
+                    <button onclick="openSpotMePortalLog()" class="flex-1 bg-white/90 hover:bg-white active:scale-95 text-brand-900 font-extrabold text-xs py-3 px-4 rounded-xl shadow-xs flex items-center justify-center space-x-2 transition">
+                        <i class="fa-solid fa-arrow-up-right-from-square text-brand-600"></i>
+                        <span>Open SPOT-Me</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Today's Attendance Checklist -->
+            <section class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="font-bold text-slate-800 dark:text-white text-base flex items-center gap-2">
+                            <i class="fa-solid fa-list-check text-brand-500 dark:text-brand-400"></i>
+                            Today's Attendance Checklist
+                        </h3>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Checkmarks synchronize instantly across paired devices</p>
+                    </div>
+                    
+                    <button onclick="exportNativeICS()" class="bg-pastel-lavender hover:bg-brand-100 text-pastel-lavenderText dark:bg-brand-950/60 dark:text-brand-200 font-bold text-xs px-3 py-1.5 rounded-xl border border-pastel-lavenderBorder dark:border-brand-800 flex items-center space-x-1.5 transition">
+                        <i class="fa-solid fa-calendar-arrow-down"></i>
+                        <span class="hidden sm:inline">Export to Phone Calendar</span>
+                    </button>
+                </div>
+
+                <div id="today-checklist-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5"></div>
+            </section>
+
+            <!-- Dashboard Action Grid -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <button onclick="openSpotMePortal()" class="p-3.5 bg-white dark:bg-slate-900 rounded-2xl border border-pink-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs flex items-center justify-center space-x-2 shadow-xs hover:border-brand-300 transition">
+                    <i class="fa-solid fa-external-link text-brand-500 text-sm"></i>
+                    <span>Official Portal</span>
+                </button>
+                <button onclick="switchTab('schedule')" class="p-3.5 bg-white dark:bg-slate-900 rounded-2xl border border-pink-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs flex items-center justify-center space-x-2 shadow-xs hover:border-brand-300 transition">
+                    <i class="fa-solid fa-pen-to-square text-brand-500 text-sm"></i>
+                    <span>Edit Times</span>
+                </button>
+                <button onclick="promptClearAllWFH()" class="p-3.5 bg-pastel-rose dark:bg-rose-950/40 rounded-2xl border border-pastel-roseBorder dark:border-rose-900/60 text-pastel-roseText dark:text-rose-300 font-bold text-xs flex items-center justify-center space-x-2 shadow-xs hover:bg-rose-100 transition col-span-2 sm:col-span-1">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                    <span>Cancel All WFH</span>
+                </button>
+            </div>
+
+        </div>
+
+        <!-- TAB 2: SCHEDULE EDITING -->
+        <div id="tab-schedule" class="hidden space-y-4">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex items-center justify-between border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <div>
+                        <h2 class="font-black text-slate-800 dark:text-white text-base">Edit Daily Reminder Schedule</h2>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Modify times, titles, or enable/disable slots</p>
+                    </div>
+                    <button onclick="promptRestoreSchedule()" class="text-xs font-bold text-brand-600 hover:text-brand-800 dark:text-brand-300 flex items-center gap-1">
+                        <i class="fa-solid fa-rotate-left"></i> Restore Default
+                    </button>
+                </div>
+
+                <div id="schedule-edit-list" class="space-y-3"></div>
+
+                <button onclick="addNewScheduleSlot()" class="w-full py-3 bg-pink-50/50 dark:bg-slate-800 hover:bg-pink-100/50 text-brand-700 dark:text-slate-200 font-bold text-xs rounded-2xl transition flex items-center justify-center space-x-2 border border-dashed border-pink-200 dark:border-slate-700">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add New Reminder Slot</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB 3: CALENDAR & HOLIDAYS -->
+        <div id="tab-holidays" class="hidden space-y-5">
+
+            <!-- Interactive Monthly WFH Calendar Grid -->
+            <div class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <div>
+                        <h2 class="font-black text-slate-800 dark:text-white text-base flex items-center gap-2">
+                            <i class="fa-solid fa-calendar-days text-brand-500"></i>
+                            WFH & Holiday Calendar View
+                        </h2>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Tap any date to toggle WFH mode. Holidays are auto-marked.</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="changeCalMonth(-1)" class="w-8 h-8 rounded-xl bg-pink-50 dark:bg-slate-800 hover:bg-pink-100 text-slate-700 dark:text-slate-200 font-bold flex items-center justify-center transition">
+                            <i class="fa-solid fa-chevron-left text-xs"></i>
+                        </button>
+                        <span id="cal-month-title" class="font-black text-sm text-slate-800 dark:text-white px-2">July 2026</span>
+                        <button onclick="changeCalMonth(1)" class="w-8 h-8 rounded-xl bg-pink-50 dark:bg-slate-800 hover:bg-pink-100 text-slate-700 dark:text-slate-200 font-bold flex items-center justify-center transition">
+                            <i class="fa-solid fa-chevron-right text-xs"></i>
+                        </button>
+                        <button onclick="resetCalToCurrentMonth()" class="text-xs bg-brand-500 text-white font-bold px-2.5 py-1.5 rounded-xl hover:bg-brand-600 transition">
+                            Today
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Days of Week Header -->
+                <div class="grid grid-cols-7 gap-1 text-center font-bold text-[11px] text-slate-400 dark:text-slate-500 uppercase pb-1">
+                    <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+                </div>
+
+                <!-- Calendar Date Grid Container -->
+                <div id="calendar-grid-container" class="grid grid-cols-7 gap-1.5"></div>
+
+                <!-- Legend & Monthly Stats -->
+                <div class="flex flex-wrap items-center justify-between text-xs pt-3 border-t border-pink-50 dark:border-slate-800 text-slate-600 dark:text-slate-400 gap-2">
+                    <div class="flex items-center space-x-3">
+                        <span class="flex items-center gap-1.5 font-bold"><span class="w-3 h-3 rounded-md bg-brand-500 inline-block"></span> WFH Day</span>
+                        <span class="flex items-center gap-1.5 font-bold"><span class="w-3 h-3 rounded-md bg-pastel-lavender dark:bg-slate-800 border border-pastel-lavenderBorder inline-block"></span> Holiday / Weekend</span>
+                    </div>
+                    <div id="cal-monthly-wfh-count" class="font-bold text-brand-700 dark:text-brand-300">0 WFH Days</div>
+                </div>
+            </div>
+
+            <!-- Official Malaysian Government Reference Links -->
+            <div class="bg-pastel-pink/60 dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pastel-pinkBorder dark:border-slate-800 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-extrabold text-slate-800 dark:text-white text-xs uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-arrow-up-right-from-square text-brand-600"></i>
+                        Verify Official Malaysian Public & School Holidays
+                    </h3>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <a href="https://www.kabinet.gov.my" target="_blank" class="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-pink-100 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between hover:border-brand-400 transition">
+                        <div class="flex items-center space-x-2">
+                            <i class="fa-solid fa-landmark text-brand-500"></i>
+                            <span>JPM Federal Holidays</span>
+                        </div>
+                        <i class="fa-solid fa-external-link text-[10px] text-slate-400"></i>
+                    </a>
+                    <a href="https://sabah.gov.my" target="_blank" class="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-pink-100 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between hover:border-brand-400 transition">
+                        <div class="flex items-center space-x-2">
+                            <i class="fa-solid fa-mountain-sun text-brand-500"></i>
+                            <span>Sabah Govt Holidays</span>
+                        </div>
+                        <i class="fa-solid fa-external-link text-[10px] text-slate-400"></i>
+                    </a>
+                    <a href="https://www.moe.gov.my" target="_blank" class="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-pink-100 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center justify-between hover:border-brand-400 transition">
+                        <div class="flex items-center space-x-2">
+                            <i class="fa-solid fa-graduation-cap text-brand-500"></i>
+                            <span>KPM School Calendar</span>
+                        </div>
+                        <i class="fa-solid fa-external-link text-[10px] text-slate-400"></i>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Public Holidays & Exclusions Configuration -->
+            <div class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex items-center justify-between border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <div>
+                        <h2 class="font-black text-slate-800 dark:text-white text-base">Public Holidays & Exclusions</h2>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Includes 2026 Malaysia, Sabah & KPM School Breaks</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="p-3.5 bg-pink-50/30 dark:bg-slate-800/60 rounded-2xl border border-pink-100/60 dark:border-slate-700 flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-xs text-slate-800 dark:text-white">Exclude Weekends</div>
+                            <div class="text-[10px] text-slate-500">Auto-skip Saturday & Sunday</div>
+                        </div>
+                        <input type="checkbox" id="exclude-weekends-toggle" class="w-5 h-5 accent-brand-500 rounded" onchange="saveHolidaySettings()">
+                    </div>
+                    <div class="p-3.5 bg-pink-50/30 dark:bg-slate-800/60 rounded-2xl border border-pink-100/60 dark:border-slate-700 flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-xs text-slate-800 dark:text-white">Exclude Holidays</div>
+                            <div class="text-[10px] text-slate-500">Auto-skip dates in list</div>
+                        </div>
+                        <input type="checkbox" id="exclude-holidays-toggle" class="w-5 h-5 accent-brand-500 rounded" onchange="saveHolidaySettings()">
+                    </div>
+                </div>
+
+                <!-- Custom Holiday Entry Input -->
+                <div class="p-3.5 bg-pastel-lavender/40 dark:bg-brand-950/20 rounded-2xl border border-pastel-lavenderBorder/60 dark:border-brand-900/40 space-y-3">
+                    <div class="font-bold text-xs text-brand-900 dark:text-brand-300">Add Public / Custom Holiday:</div>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="text" id="holiday-name-input" placeholder="Holiday Name (e.g. Merdeka Day)" class="flex-1 bg-white dark:bg-slate-800 border border-pink-100 dark:border-slate-600 text-slate-800 dark:text-white text-xs rounded-xl px-3 py-2 outline-none font-medium">
+                        <input type="date" id="holiday-date-input" class="bg-white dark:bg-slate-800 border border-pink-100 dark:border-slate-600 text-slate-800 dark:text-white text-xs rounded-xl px-3 py-2 font-bold outline-none">
+                        <button onclick="addHoliday()" class="bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs px-4 py-2 rounded-xl transition">
+                            Add Holiday
+                        </button>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">Configured Holidays (Malaysia & Sabah 2026)</div>
+                    <div id="holidays-list-container" class="space-y-2 max-h-80 overflow-y-auto"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: HISTORY LOG -->
+        <div id="tab-history" class="hidden space-y-4">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="flex items-center justify-between border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <div>
+                        <h2 class="font-black text-slate-800 dark:text-white text-base">Check-in History Log</h2>
+                        <p class="text-slate-500 dark:text-slate-400 text-xs">Synced history of acknowledged check-ins</p>
+                    </div>
+                    <button onclick="promptClearHistory()" class="text-xs font-bold text-rose-600 hover:text-rose-800 dark:text-rose-400 flex items-center gap-1">
+                        <i class="fa-solid fa-trash-can"></i> Clear Log
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-between gap-2 text-xs">
+                    <select id="history-filter-select" class="bg-pink-50/50 dark:bg-slate-800 text-slate-800 dark:text-white rounded-xl px-3 py-2 border border-pink-100 dark:border-slate-700 font-bold outline-none" onchange="renderHistoryLog()">
+                        <option value="ALL">All Actions</option>
+                        <option value="DONE">Done / Acknowledged</option>
+                        <option value="OPENED_SPOTME">Opened SPOT-Me</option>
+                    </select>
+
+                    <button onclick="exportHistoryCSV()" class="bg-pink-50/50 dark:bg-slate-800 hover:bg-pink-100 text-slate-700 dark:text-slate-200 font-bold px-3 py-2 rounded-xl transition flex items-center space-x-1 border border-pink-100 dark:border-slate-700">
+                        <i class="fa-solid fa-file-csv text-teal-600"></i>
+                        <span>Export CSV</span>
+                    </button>
+                </div>
+
+                <div class="max-h-96 overflow-y-auto space-y-2 pr-1" id="history-log-container"></div>
+            </div>
+        </div>
+
+        <!-- TAB 5: SETTINGS -->
+        <div id="tab-settings" class="hidden space-y-4">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-xs border border-pink-100 dark:border-slate-800 space-y-4">
+                <div class="border-b border-pink-50 dark:border-slate-800 pb-3">
+                    <h2 class="font-black text-slate-800 dark:text-white text-base">App Settings & Preferences</h2>
+                    <p class="text-slate-500 dark:text-slate-400 text-xs">Configure links, intervals, and notification audio</p>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="space-y-1">
+                        <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">SPOT-Me Official Web URL:</label>
+                        <div class="flex gap-2">
+                            <input type="url" id="setting-spotme-url" class="flex-1 bg-pink-50/30 dark:bg-slate-800 border border-pink-100 dark:border-slate-700 text-slate-800 dark:text-white text-xs rounded-xl px-3 py-2.5 font-mono outline-none" placeholder="https://spotme.jdn.gov.my/dashboard/pegawai">
+                            <button onclick="testSpotMeUrl()" class="bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs px-3 py-2 rounded-xl">Test Link</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="space-y-1">
+                            <label class="block text-xs font-bold text-slate-700 dark:text-slate-300">Early Reminder:</label>
+                            <select id="setting-early-interval" class="w-full bg-pink-50/30 dark:bg-slate-800 border border-pink-100 dark:border-slate-700 text-slate-800 dark:text-white text-xs rounded-xl p-2.5 font-bold outline-none">
+                                <option value="0">Disabled (Exact time only)</option>
+                                <option value="5">5 Minutes Before</option>
+                                <option value="10" selected>10 Minutes Before</option>
+                                <option value="15">15 Minutes Before</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="block text-xs font-bold text-slate-700 dark:text-slate-300">Follow-up Reminder:</label>
+                            <select id="setting-followup-interval" class="w-full bg-pink-50/30 dark:bg-slate-800 border border-pink-100 dark:border-slate-700 text-slate-800 dark:text-white text-xs rounded-xl p-2.5 font-bold outline-none">
+                                <option value="0">Disabled</option>
+                                <option value="5" selected>5 Minutes After</option>
+                                <option value="10">10 Minutes After</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1">
+                        <label class="block text-xs font-bold text-slate-700 dark:text-slate-300">Notification Audio Type:</label>
+                        <div class="flex gap-2">
+                            <select id="setting-sound-type" class="flex-1 bg-pink-50/30 dark:bg-slate-800 border border-pink-100 dark:border-slate-700 text-slate-800 dark:text-white text-xs rounded-xl p-2.5 font-bold outline-none">
+                                <option value="CHIME_VOICE" selected>Upbeat Chime + Voice Alert</option>
+                                <option value="CHIME_ONLY">Upbeat Chime Only</option>
+                                <option value="VOICE_ONLY">Voice Alert Only</option>
+                                <option value="SILENT">Silent Notification</option>
+                            </select>
+                            <button onclick="testNotificationSound()" class="bg-slate-700 text-white font-bold text-xs px-3 py-2 rounded-xl flex items-center space-x-1">
+                                <i class="fa-solid fa-volume-high"></i>
+                                <span>Test Audio</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button onclick="saveAppSettings()" class="w-full py-3 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-xl transition shadow-xs">
+                        Save Preferences
+                    </button>
+
+                    <!-- Mobile Audio Troubleshooting Card -->
+                    <div class="bg-pink-50 dark:bg-slate-800/80 p-4 rounded-2xl border border-pink-100 dark:border-slate-700 space-y-2 text-xs">
+                        <div class="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                            <i class="fa-solid fa-circle-info text-brand-500"></i>
+                            <span>Mobile & Browser Audio Troubleshooting:</span>
+                        </div>
+                        <ul class="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-300 font-medium">
+                            <li><strong>iPhone / iPad:</strong> Ensure the physical Silent Switch (side switch) is turned OFF so browser chimes can play.</li>
+                            <li><strong>Background Lock Screen Alarms:</strong> Mobile browsers restrict audio when phone screens are locked. Use <strong>"Export to Phone Calendar"</strong> to get system lock-screen alarms.</li>
+                            <li><strong>Volume:</strong> Check device media volume level.</li>
+                        </ul>
+                    </div>
+
+                    <div class="pt-4 border-t border-pink-50 dark:border-slate-800">
+                        <button onclick="promptResetAppData()" class="text-xs font-bold text-rose-600 hover:text-rose-800 dark:text-rose-400 flex items-center gap-1.5">
+                            <i class="fa-solid fa-triangle-exclamation"></i> Reset App Data & History
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Bottom Mobile Navigation Bar -->
+    <footer class="fixed bottom-0 inset-x-0 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border-t border-pink-100 dark:border-slate-800 z-40 py-2">
+        <div class="max-w-md mx-auto px-6 flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <button onclick="switchTab('dashboard')" id="bnav-dashboard" class="flex flex-col items-center space-y-0.5 text-brand-500 dark:text-brand-300 font-bold">
+                <i class="fa-solid fa-house text-lg"></i>
+                <span class="text-[10px] font-bold">Home</span>
+            </button>
+            <button onclick="switchTab('schedule')" id="bnav-schedule" class="flex flex-col items-center space-y-0.5 hover:text-brand-500">
+                <i class="fa-solid fa-clock text-lg"></i>
+                <span class="text-[10px] font-bold">Schedule</span>
+            </button>
+            <button onclick="openSpotMePortalLog()" class="flex flex-col items-center justify-center -mt-5 w-12 h-12 rounded-full bg-brand-500 text-white shadow-md active:scale-95 transition">
+                <i class="fa-solid fa-arrow-up-right-from-square text-base"></i>
+            </button>
+            <button onclick="switchTab('holidays')" id="bnav-holidays" class="flex flex-col items-center space-y-0.5 hover:text-brand-500">
+                <i class="fa-solid fa-calendar-days text-lg"></i>
+                <span class="text-[10px] font-bold">Calendar</span>
+            </button>
+            <button onclick="switchTab('settings')" id="bnav-settings" class="flex flex-col items-center space-y-0.5 hover:text-brand-500">
+                <i class="fa-solid fa-gear text-lg"></i>
+                <span class="text-[10px] font-bold">Settings</span>
+            </button>
+        </div>
+    </footer>
+
+    <!-- Sync Guide Help Modal -->
+    <div id="drive-help-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-xl border border-pink-100 dark:border-slate-800 space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div class="flex items-center space-x-2">
+                    <i class="fa-solid fa-cloud text-brand-500 text-xl"></i>
+                    <h3 class="font-bold text-slate-800 dark:text-white text-base">Real-Time Sync Guide</h3>
+                </div>
+                <button onclick="closeDriveHelpModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+
+            <div class="space-y-3 text-xs text-slate-600 dark:text-slate-300">
+                <p>Dual-Engine Real-Time Sync connects your <strong>Phone, iPad, and Laptop</strong> without passwords or accounts.</p>
+                
+                <div class="bg-pink-50 dark:bg-rose-950/40 border border-pink-200 dark:border-rose-800/60 p-3.5 rounded-2xl space-y-2">
+                    <div class="font-bold text-rose-900 dark:text-rose-200">How to Pair Devices:</div>
+                    <ol class="list-decimal list-inside space-y-1.5 text-rose-900 dark:text-rose-300 font-medium">
+                        <li>Tap <strong>"Create New Code"</strong> on your main device.</li>
+                        <li>Copy the generated 6-digit Sync Code (e.g. <code>SPOT-8492</code>).</li>
+                        <li>Enter this code into the Sync box on your second device and tap <strong>Pair Devices</strong>.</li>
+                        <li>Any checkmarks marked on your phone now update live on your laptop screen!</li>
+                    </ol>
+                </div>
+            </div>
+
+            <div class="pt-2 flex items-center justify-end">
+                <button onclick="closeDriveHelpModal()" class="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-xl">
+                    Got It
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Modal Dialog -->
+    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 rounded-3xl max-w-sm w-full p-5 shadow-xl border border-pink-100 dark:border-slate-800 space-y-4 text-center">
+            <div class="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 flex items-center justify-center text-xl mx-auto">
+                <i class="fa-solid fa-circle-question"></i>
+            </div>
+            <div class="space-y-1">
+                <h3 id="confirm-modal-title" class="font-bold text-slate-800 dark:text-white text-base">Are you sure?</h3>
+                <p id="confirm-modal-msg" class="text-xs text-slate-500 dark:text-slate-400">This action cannot be undone.</p>
+            </div>
+            <div class="flex gap-2 pt-2">
+                <button onclick="closeConfirmModal(false)" class="flex-1 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl">
+                    Cancel
+                </button>
+                <button id="confirm-modal-yes-btn" onclick="closeConfirmModal(true)" class="flex-1 py-2.5 bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs rounded-xl">
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fallback Audio Ring Element -->
+    <audio id="audio-chime-fallback" preload="auto">
+        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+    </audio>
+
+    <!-- APPLICATION STATE & REAL-TIME CLOUD LOGIC -->
+    <script>
+        const DEFAULT_SCHEDULE = [
+            { id: 1, name: "Mula Bertugas", time: "07:30", enabled: true, note: "Waktu mula bekerja SPOT-Me" },
+            { id: 2, name: "Pengesahan Pertama", time: "08:30", enabled: true, note: "Sesi Pengesahan ke-1" },
+            { id: 3, name: "Pengesahan Kedua", time: "09:30", enabled: true, note: "Sesi Pengesahan ke-2" },
+            { id: 4, name: "Pengesahan Ketiga", time: "10:30", enabled: true, note: "Sesi Pengesahan ke-3" },
+            { id: 5, name: "Pengesahan Keempat", time: "11:30", enabled: true, note: "Sesi Pengesahan ke-4" },
+            { id: 6, name: "Pengesahan Kelima", time: "12:30", enabled: true, note: "Sesi Pengesahan ke-5" },
+            { id: 7, name: "Pengesahan Keenam", time: "14:30", enabled: true, note: "Sesi Pengesahan ke-6" },
+            { id: 8, name: "Pengesahan Ketuju", time: "15:30", enabled: true, note: "Sesi Pengesahan ke-7" },
+            { id: 9, name: "Tamat Bertugas", time: "16:30", enabled: true, note: "Waktu selesai bekerja SPOT-Me" }
+        ];
+
+        const DEFAULT_HOLIDAYS = [
+            { id: "h1", name: "Tahun Baru 2026", date: "2026-01-01", link: "https://www.kabinet.gov.my" },
+            { id: "h2", name: "Tahun Baru Cina Day 1", date: "2026-02-17", link: "https://www.kabinet.gov.my" },
+            { id: "h3", name: "Tahun Baru Cina Day 2", date: "2026-02-18", link: "https://www.kabinet.gov.my" },
+            { id: "h4", name: "Good Friday (Sabah & Sarawak)", date: "2026-04-03", link: "https://sabah.gov.my" },
+            { id: "h5", name: "Hari Raya Aidilfitri Day 1", date: "2026-03-20", link: "https://www.kabinet.gov.my" },
+            { id: "h6", name: "Hari Raya Aidilfitri Day 2", date: "2026-03-21", link: "https://www.kabinet.gov.my" },
+            { id: "h7", name: "Hari Pekerja (Labour Day)", date: "2026-05-01", link: "https://www.kabinet.gov.my" },
+            { id: "h8", name: "Hari Wesak", date: "2026-05-31", link: "https://www.kabinet.gov.my" },
+            { id: "h9", name: "Pesta Kaamatan Day 1 (Sabah)", date: "2026-05-30", link: "https://sabah.gov.my" },
+            { id: "h10", name: "Pesta Kaamatan Day 2 (Sabah)", date: "2026-05-31", link: "https://sabah.gov.my" },
+            { id: "h11", name: "Hari Keputeraan YDB Agong", date: "2026-06-01", link: "https://www.kabinet.gov.my" },
+            { id: "h12", name: "Hari Raya Haji", date: "2026-05-27", link: "https://www.kabinet.gov.my" },
+            { id: "h13", name: "Awal Muharram", date: "2026-06-16", link: "https://www.kabinet.gov.my" },
+            { id: "h14", name: "Hari Kebangsaan (Merdeka Day)", date: "2026-08-31", link: "https://www.kabinet.gov.my" },
+            { id: "h15", name: "Maulidur Rasul", date: "2026-08-25", link: "https://www.kabinet.gov.my" },
+            { id: "h16", name: "Hari Malaysia", date: "2026-09-16", link: "https://www.kabinet.gov.my" },
+            { id: "h17", name: "Hari Lahir TTY Sabah", date: "2026-10-03", link: "https://sabah.gov.my" },
+            { id: "h18", name: "Hari Deepavali", date: "2026-11-08", link: "https://www.kabinet.gov.my" },
+            { id: "h19", name: "Christmas Eve (Sabah Public Holiday)", date: "2026-12-24", link: "https://sabah.gov.my" },
+            { id: "h20", name: "Hari Krismas", date: "2026-12-25", link: "https://www.kabinet.gov.my" },
+            { id: "h21", name: "Cuti Penggal 1 KPM (Sabah)", date: "2026-03-21", link: "https://www.moe.gov.my" },
+            { id: "h22", name: "Cuti Pertengahan Tahun KPM (Sabah)", date: "2026-05-23", link: "https://www.moe.gov.my" },
+            { id: "h23", name: "Cuti Penggal 2 KPM (Sabah)", date: "2026-08-29", link: "https://www.moe.gov.my" },
+            { id: "h24", name: "Cuti Akhir Persekolahan KPM (Sabah)", date: "2026-12-05", link: "https://www.moe.gov.my" }
+        ];
+
+        let appState = {
+            syncCode: "",
+            recentCodes: [],
+            wfhDates: [],
+            schedule: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)),
+            holidays: JSON.parse(JSON.stringify(DEFAULT_HOLIDAYS)),
+            acknowledgedSlots: {},
+            history: [],
+            lastUpdated: 0,
+            settings: {
+                spotMeUrl: "https://spotme.jdn.gov.my/dashboard/pegawai",
+                earlyInterval: 10,
+                followupInterval: 5,
+                soundType: "CHIME_VOICE",
+                excludeWeekends: true,
+                excludeHolidays: true,
+                darkMode: false,
+                lastSyncTime: ""
+            }
+        };
+
+        let confirmCallback = null;
+        let unsubscribeSyncListener = null;
+        let fallbackPollTimer = null;
+        let isRemoteUpdating = false;
+        let calCurrentViewDate = new Date();
+        
+        let globalAudioCtx = null;
+        let isAudioUnlocked = false;
+        let activeAlarmSlotKey = null;
+        let alarmLoopInterval = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            loadState();
+            checkNotificationPermissions();
+
+            // Persistent sync code check
+            if (!appState.syncCode) {
+                appState.syncCode = "SPOT-" + Math.floor(1000 + Math.random() * 9000);
+                saveState();
+            }
+
+            renderAllViews();
+            startClockAndAlarmLoop();
+
+            // Auto-connect to cloud sync
+            connectCloudSyncCode(appState.syncCode, true);
+        });
+
+        // Audio Engine unlocker for browsers
+        function unlockAudioEngineOnce() {
+            if (isAudioUnlocked) return;
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    if (!globalAudioCtx) {
+                        globalAudioCtx = new AudioContext();
+                    }
+                    if (globalAudioCtx.state === 'suspended') {
+                        globalAudioCtx.resume();
+                    }
+                    const osc = globalAudioCtx.createOscillator();
+                    const gain = globalAudioCtx.createGain();
+                    gain.gain.value = 0.001;
+                    osc.connect(gain);
+                    gain.connect(globalAudioCtx.destination);
+                    osc.start(0);
+                    osc.stop(0.01);
+                }
+
+                if ('speechSynthesis' in window) {
+                    const silentUtter = new SpeechSynthesisUtterance('');
+                    silentUtter.volume = 0;
+                    window.speechSynthesis.speak(silentUtter);
+                }
+
+                isAudioUnlocked = true;
+                
+                const bannerTitle = document.getElementById('audio-status-title');
+                const bannerSub = document.getElementById('audio-status-sub');
+                const permBanner = document.getElementById('notif-perm-banner');
+                
+                if (bannerTitle) bannerTitle.innerText = "Audio & Chime Alarms Enabled ✓";
+                if (bannerSub) bannerSub.innerText = "Audio context active. Web chimes will sound at scheduled slots.";
+                if (permBanner) {
+                    permBanner.classList.remove('bg-pastel-pink', 'border-pastel-pinkBorder');
+                    permBanner.classList.add('bg-pastel-mint', 'border-pastel-mintBorder', 'text-pastel-mintText');
+                }
+            } catch(e) {
+                console.warn("Audio unlock note:", e);
+            }
+        }
+
+        function activateAudioAndNotifications() {
+            unlockAudioEngineOnce();
+            requestNotificationPermission();
+            playChimeSound();
+            showToast("Audio & Alarms Activated!", "success");
+        }
+
+        function showToast(message, type = "info") {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+
+            const toast = document.createElement('div');
+            let iconClass = "fa-circle-info text-rose-400";
+            if (type === "success") iconClass = "fa-circle-check text-emerald-400";
+            if (type === "error") iconClass = "fa-circle-exclamation text-amber-400";
+
+            toast.className = "bg-slate-900/90 dark:bg-slate-800/90 text-white text-xs font-bold px-4 py-3 rounded-2xl shadow-lg border border-slate-700 backdrop-blur-xs flex items-center justify-between gap-3 animate-toast pointer-events-auto";
+            toast.innerHTML = `
+                <div class="flex items-center space-x-2.5">
+                    <i class="fa-solid ${iconClass} text-sm"></i>
+                    <span>${message}</span>
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-slate-400 hover:text-white">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3500);
+        }
+
+        function showConfirmModal(title, msg, onConfirm) {
+            document.getElementById('confirm-modal-title').innerText = title;
+            document.getElementById('confirm-modal-msg').innerText = msg;
+            confirmCallback = onConfirm;
+            document.getElementById('confirm-modal').classList.remove('hidden');
+        }
+
+        function closeConfirmModal(accepted) {
+            document.getElementById('confirm-modal').classList.add('hidden');
+            if (accepted && typeof confirmCallback === 'function') {
+                confirmCallback();
+            }
+            confirmCallback = null;
+        }
+
+        function getTodayStr() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = (now.getMonth() + 1).toString().padStart(2, '0');
+            const day = now.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function getTomorrowStr() {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const year = tomorrow.getFullYear();
+            const month = (tomorrow.getMonth() + 1).toString().padStart(2, '0');
+            const day = tomorrow.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function loadState() {
+            const saved = localStorage.getItem('SPOTME_APP_STATE');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    appState = { ...appState, ...parsed };
+                } catch(e) {
+                    console.error("State parse error", e);
+                }
+            }
+
+            if (!appState.schedule || appState.schedule.length === 0) {
+                appState.schedule = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE));
+            }
+            if (!appState.holidays || appState.holidays.length === 0) {
+                appState.holidays = JSON.parse(JSON.stringify(DEFAULT_HOLIDAYS));
+            }
+            if (!appState.recentCodes) appState.recentCodes = [];
+
+            applyDarkMode();
+        }
+
+        function saveState() {
+            appState.lastUpdated = Date.now();
+            localStorage.setItem('SPOTME_APP_STATE', JSON.stringify(appState));
+            applyDarkMode();
+            renderAllViews();
+            if (!isRemoteUpdating) {
+                pushStateToCloud();
+            }
+        }
+
+        function mergeRemoteState(cloudData) {
+            if (!cloudData) return;
+            
+            isRemoteUpdating = true;
+            
+            // Union merge for WFH Dates so dates aren't lost
+            const mergedDates = new Set([...appState.wfhDates, ...(cloudData.wfhDates || [])]);
+            appState.wfhDates = Array.from(mergedDates);
+
+            // Merge acknowledged slots
+            appState.acknowledgedSlots = { ...appState.acknowledgedSlots, ...(cloudData.acknowledgedSlots || {}) };
+
+            // Merge history without duplicating IDs
+            const existingHistoryIds = new Set(appState.history.map(h => h.id));
+            if (cloudData.history) {
+                cloudData.history.forEach(item => {
+                    if (!existingHistoryIds.has(item.id)) {
+                        appState.history.push(item);
+                        existingHistoryIds.add(item.id);
+                    }
+                });
+                appState.history.sort((a, b) => b.id.localeCompare(a.id));
+            }
+
+            if (cloudData.schedule && cloudData.schedule.length > 0) appState.schedule = cloudData.schedule;
+            if (cloudData.settings) appState.settings = { ...appState.settings, ...cloudData.settings };
+
+            appState.lastUpdated = Math.max(appState.lastUpdated || 0, cloudData.lastUpdated || 0);
+
+            localStorage.setItem('SPOTME_APP_STATE', JSON.stringify(appState));
+            renderAllViews();
+            isRemoteUpdating = false;
+        }
+
+        function renderAllViews() {
+            const todayStr = getTodayStr();
+            const tomorrowStr = getTomorrowStr();
+
+            const todayLabel = document.getElementById('today-date-label');
+            const tomorrowLabel = document.getElementById('tomorrow-date-label');
+
+            if (todayLabel) todayLabel.innerText = todayStr;
+            if (tomorrowLabel) tomorrowLabel.innerText = tomorrowStr;
+
+            const todayToggle = document.getElementById('wfh-today-toggle');
+            const tomorrowToggle = document.getElementById('wfh-tomorrow-toggle');
+            if (todayToggle) todayToggle.checked = appState.wfhDates.includes(todayStr);
+            if (tomorrowToggle) tomorrowToggle.checked = appState.wfhDates.includes(tomorrowStr);
+
+            const datesContainer = document.getElementById('active-dates-container');
+            if (datesContainer) {
+                datesContainer.innerHTML = '';
+                if (appState.wfhDates.length === 0) {
+                    datesContainer.innerHTML = '<span class="text-slate-400 italic text-xs">No active WFH days scheduled. Toggle "WFH Today" above to activate.</span>';
+                } else {
+                    appState.wfhDates.sort().forEach(dateStr => {
+                        const isToday = dateStr === todayStr;
+                        const pill = document.createElement('div');
+                        pill.className = `flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold border ${isToday ? 'bg-brand-500 text-white border-brand-600' : 'bg-pastel-lavender dark:bg-slate-800 text-pastel-lavenderText dark:text-slate-200 border-pastel-lavenderBorder dark:border-slate-700'}`;
+                        pill.innerHTML = `
+                            <span>🏠 ${dateStr} ${isToday ? '(Today)' : ''}</span>
+                            <button onclick="removeWFHDate('${dateStr}')" class="ml-1 opacity-70 hover:opacity-100">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        `;
+                        datesContainer.appendChild(pill);
+                    });
+                }
+            }
+
+            const badge = document.getElementById('active-reminders-badge');
+            if (badge) badge.innerText = `${appState.wfhDates.length} WFH Days Scheduled`;
+
+            renderScheduleEditor();
+            renderHolidaysList();
+            renderInteractiveCalendar();
+            renderRecentCodes();
+
+            const urlInput = document.getElementById('setting-spotme-url');
+            if (urlInput) urlInput.value = appState.settings.spotMeUrl || "https://spotme.jdn.gov.my/dashboard/pegawai";
+
+            const earlyInt = document.getElementById('setting-early-interval');
+            if (earlyInt) earlyInt.value = appState.settings.earlyInterval;
+
+            const followInt = document.getElementById('setting-followup-interval');
+            if (followInt) followInt.value = appState.settings.followupInterval;
+
+            const soundType = document.getElementById('setting-sound-type');
+            if (soundType) soundType.value = appState.settings.soundType;
+
+            const exWeekends = document.getElementById('exclude-weekends-toggle');
+            if (exWeekends) exWeekends.checked = appState.settings.excludeWeekends;
+
+            const exHolidays = document.getElementById('exclude-holidays-toggle');
+            if (exHolidays) exHolidays.checked = appState.settings.excludeHolidays;
+
+            renderTodayChecklist();
+            renderHistoryLog();
+            updateNextReminderCard();
+            applyDarkMode();
+        }
+
+        function switchTab(tabId) {
+            const tabs = ['dashboard', 'schedule', 'holidays', 'history', 'settings'];
+            tabs.forEach(t => {
+                const el = document.getElementById(`tab-${t}`);
+                const btn = document.getElementById(`tab-btn-${t}`);
+                const bnav = document.getElementById(`bnav-${t}`);
+
+                if (t === tabId) {
+                    if (el) el.classList.remove('hidden');
+                    if (btn) btn.className = "flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 bg-white dark:bg-slate-700 text-brand-700 dark:text-white shadow-xs font-bold";
+                    if (bnav) bnav.className = "flex flex-col items-center space-y-0.5 text-brand-500 dark:text-brand-300 font-bold";
+                } else {
+                    if (el) el.classList.add('hidden');
+                    if (btn) btn.className = "flex-1 py-2 px-3 rounded-xl transition flex items-center justify-center space-x-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium";
+                    if (bnav) bnav.className = "flex flex-col items-center space-y-0.5 hover:text-brand-500 text-slate-500 dark:text-slate-400 font-bold";
+                }
+            });
+
+            if (tabId === 'holidays') {
+                renderInteractiveCalendar();
+            }
+        }
+
+        function toggleWFHDate(type) {
+            unlockAudioEngineOnce();
+            const targetDate = type === 'today' ? getTodayStr() : getTomorrowStr();
+            const checkbox = document.getElementById(`wfh-${type}-toggle`);
+
+            if (checkbox && checkbox.checked) {
+                if (!appState.wfhDates.includes(targetDate)) appState.wfhDates.push(targetDate);
+                showToast(`WFH Mode activated for ${targetDate}`, "success");
+            } else {
+                appState.wfhDates = appState.wfhDates.filter(d => d !== targetDate);
+                showToast(`WFH Mode cancelled for ${targetDate}`, "info");
+            }
+            saveState();
+        }
+
+        function toggleWFHDateDirect(dateStr) {
+            unlockAudioEngineOnce();
+            if (appState.wfhDates.includes(dateStr)) {
+                appState.wfhDates = appState.wfhDates.filter(d => d !== dateStr);
+                showToast(`Removed WFH date: ${dateStr}`, "info");
+            } else {
+                appState.wfhDates.push(dateStr);
+                showToast(`Set WFH date: ${dateStr}`, "success");
+            }
+            saveState();
+        }
+
+        function addCustomWFHDate() {
+            unlockAudioEngineOnce();
+            const input = document.getElementById('custom-wfh-date-input');
+            const dateVal = input ? input.value : '';
+            if (!dateVal) return;
+
+            if (!appState.wfhDates.includes(dateVal)) {
+                appState.wfhDates.push(dateVal);
+                saveState();
+                showToast(`Scheduled WFH date: ${dateVal}`, "success");
+                if (input) input.value = '';
+            }
+        }
+
+        function removeWFHDate(dateStr) {
+            appState.wfhDates = appState.wfhDates.filter(d => d !== dateStr);
+            saveState();
+        }
+
+        function promptClearAllWFH() {
+            showConfirmModal("Cancel All WFH Reminders?", "This will turn off reminders for all scheduled dates.", () => {
+                appState.wfhDates = [];
+                saveState();
+                showToast("All WFH reminders cancelled.", "info");
+            });
+        }
+
+        function renderInteractiveCalendar() {
+            const container = document.getElementById('calendar-grid-container');
+            const monthTitleEl = document.getElementById('cal-month-title');
+            const monthlyCountEl = document.getElementById('cal-monthly-wfh-count');
+
+            if (!container || !monthTitleEl) return;
+            container.innerHTML = '';
+
+            const year = calCurrentViewDate.getFullYear();
+            const month = calCurrentViewDate.getMonth();
+
+            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            monthTitleEl.innerText = `${monthNames[month]} ${year}`;
+
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const todayStr = getTodayStr();
+
+            let monthlyWfhCount = 0;
+
+            for (let i = 0; i < firstDay; i++) {
+                const emptyCell = document.createElement('div');
+                emptyCell.className = "h-16 bg-pink-50/20 dark:bg-slate-800/20 rounded-2xl border border-transparent";
+                container.appendChild(emptyCell);
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const monthStr = (month + 1).toString().padStart(2, '0');
+                const dayStr = day.toString().padStart(2, '0');
+                const dateKey = `${year}-${monthStr}-${dayStr}`;
+
+                const isToday = dateKey === todayStr;
+                const isWFH = appState.wfhDates.includes(dateKey);
+                if (isWFH) monthlyWfhCount++;
+
+                const matchedHoliday = appState.holidays.find(h => h.date === dateKey);
+
+                const cell = document.createElement('button');
+                cell.onclick = () => toggleWFHDateDirect(dateKey);
+
+                let bgClasses = "bg-pink-50/30 dark:bg-slate-800/50 border-pink-100/60 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-brand-400";
+                
+                if (isWFH) {
+                    bgClasses = "bg-brand-500 text-white border-brand-600 shadow-xs font-bold";
+                } else if (matchedHoliday) {
+                    bgClasses = "bg-pastel-lavender dark:bg-purple-950/40 border-pastel-lavenderBorder dark:border-purple-800 text-pastel-lavenderText dark:text-purple-200 font-semibold";
+                }
+
+                if (isToday) {
+                    bgClasses += " ring-2 ring-brand-400 font-extrabold";
+                }
+
+                cell.className = `h-16 rounded-2xl border p-1.5 flex flex-col justify-between text-left transition relative active:scale-95 ${bgClasses}`;
+
+                cell.innerHTML = `
+                    <div class="flex items-center justify-between text-[11px] w-full">
+                        <span class="font-bold">${day}</span>
+                        ${isToday ? '<span class="text-[9px] bg-rose-200 text-rose-900 px-1 rounded-sm">Today</span>' : ''}
+                    </div>
+                    <div class="text-[10px] truncate w-full">
+                        ${isWFH ? '<span class="font-extrabold">🏠 WFH</span>' : ''}
+                        ${matchedHoliday ? `<span class="block truncate ${isWFH ? 'text-pink-100' : 'text-purple-700 dark:text-purple-300'} font-medium">🎉 ${matchedHoliday.name}</span>` : ''}
+                    </div>
+                `;
+                container.appendChild(cell);
+            }
+
+            if (monthlyCountEl) {
+                monthlyCountEl.innerText = `${monthlyWfhCount} WFH Days scheduled in ${monthNames[month]} ${year}`;
+            }
+        }
+
+        function changeCalMonth(delta) {
+            calCurrentViewDate.setMonth(calCurrentViewDate.getMonth() + delta);
+            renderInteractiveCalendar();
+        }
+
+        function resetCalToCurrentMonth() {
+            calCurrentViewDate = new Date();
+            renderInteractiveCalendar();
+        }
+
+        function renderTodayChecklist() {
+            const container = document.getElementById('today-checklist-grid');
+            if (!container) return;
+            container.innerHTML = '';
+            const todayStr = getTodayStr();
+            const isTodayWFH = appState.wfhDates.includes(todayStr);
+
+            if (!appState.schedule || appState.schedule.length === 0) {
+                appState.schedule = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE));
+            }
+
+            appState.schedule.forEach(slot => {
+                const slotKey = `${todayStr}_${slot.id}`;
+                const isAck = appState.acknowledgedSlots[slotKey];
+                
+                const card = document.createElement('div');
+                card.className = `p-3.5 rounded-2xl border flex items-center justify-between transition ${isAck ? 'bg-pastel-mint dark:bg-emerald-950/30 border-pastel-mintBorder dark:border-emerald-800/80' : 'bg-pink-50/30 dark:bg-slate-800/60 border-pink-100/80 dark:border-slate-700/80'}`;
+                
+                card.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <button onclick="toggleAcknowledgeSlot('${slotKey}', '${slot.name}')" class="w-6 h-6 rounded-lg border flex items-center justify-center transition ${isAck ? 'bg-teal-500 border-teal-600 text-white' : 'border-pink-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-transparent hover:border-brand-400'}">
+                            <i class="fa-solid fa-check text-xs"></i>
+                        </button>
+                        <div>
+                            <div class="text-xs font-extrabold ${isAck ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-800 dark:text-slate-200'}">${slot.name}</div>
+                            <div class="text-sm font-black text-brand-700 dark:text-brand-300">${formatTimeDisplay(slot.time)}</div>
+                        </div>
+                    </div>
+                    <span class="text-[10px] font-bold px-2.5 py-0.5 rounded-full ${isAck ? 'bg-pastel-mintText text-white dark:bg-emerald-900 dark:text-emerald-200' : 'bg-pink-100/70 text-pink-800 dark:bg-slate-700 dark:text-slate-300'}">
+                        ${isAck ? 'Done' : (isTodayWFH ? 'Scheduled' : 'Office Mode')}
+                    </span>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function toggleAcknowledgeSlot(slotKey, slotName) {
+            unlockAudioEngineOnce();
+            stopAlarmRinging();
+            if (appState.acknowledgedSlots[slotKey]) {
+                delete appState.acknowledgedSlots[slotKey];
+            } else {
+                appState.acknowledgedSlots[slotKey] = true;
+                logHistory(slotName, "DONE", "User marked as Done in checklist");
+                showToast(`Marked ${slotName} as Done!`, "success");
+            }
+            saveState();
+        }
+
+        function updateNextReminderCard() {
+            const now = new Date();
+            const todayStr = getTodayStr();
+            const isTodayWFH = appState.wfhDates.includes(todayStr);
+
+            const titleEl = document.getElementById('next-reminder-title');
+            const subEl = document.getElementById('next-reminder-subtitle');
+            const badgeEl = document.getElementById('countdown-badge');
+
+            if (!titleEl || !subEl || !badgeEl) return;
+
+            if (!isTodayWFH) {
+                titleEl.innerText = "Office Day (Reminders Silent)";
+                subEl.innerText = "Toggle WFH Mode above to enable automated check-in alerts.";
+                badgeEl.innerText = "--:--:--";
+                return;
+            }
+
+            const currentHHMM = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+            let nextSlot = null;
+
+            for (let slot of appState.schedule) {
+                const slotKey = `${todayStr}_${slot.id}`;
+                if (slot.enabled && !appState.acknowledgedSlots[slotKey] && slot.time >= currentHHMM) {
+                    nextSlot = slot;
+                    break;
+                }
+            }
+
+            if (nextSlot) {
+                titleEl.innerText = nextSlot.name;
+                subEl.innerText = `Scheduled at ${formatTimeDisplay(nextSlot.time)} (${nextSlot.note})`;
+                
+                const [h, m] = nextSlot.time.split(':').map(Number);
+                const targetTime = new Date();
+                targetTime.setHours(h, m, 0, 0);
+
+                const diffMs = targetTime - now;
+                if (diffMs > 0) {
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffSecs = Math.floor((diffMs % 60000) / 1000);
+                    badgeEl.innerText = `In ${diffMins}m ${diffSecs}s`;
+                } else {
+                    badgeEl.innerText = "DUE NOW!";
+                }
+            } else {
+                titleEl.innerText = "All Check-ins Completed!";
+                subEl.innerText = "You have completed all SPOT-Me attendance slots for today.";
+                badgeEl.innerText = "00:00:00";
+            }
+        }
+
+        function acknowledgeNextReminder() {
+            unlockAudioEngineOnce();
+            stopAlarmRinging();
+            const todayStr = getTodayStr();
+            for (let slot of appState.schedule) {
+                const slotKey = `${todayStr}_${slot.id}`;
+                if (slot.enabled && !appState.acknowledgedSlots[slotKey]) {
+                    appState.acknowledgedSlots[slotKey] = true;
+                    logHistory(slot.name, "DONE", "Acknowledged from Dashboard");
+                    saveState();
+                    playChimeSound();
+                    showToast(`Acknowledged ${slot.name}`, "success");
+                    break;
+                }
+            }
+        }
+
+        function renderScheduleEditor() {
+            const container = document.getElementById('schedule-edit-list');
+            if (!container) return;
+            container.innerHTML = '';
+
+            appState.schedule.forEach(slot => {
+                const row = document.createElement('div');
+                row.className = "p-3 bg-pink-50/30 dark:bg-slate-800/60 rounded-2xl border border-pink-100/60 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3";
+                row.innerHTML = `
+                    <div class="flex items-center space-x-3 flex-1">
+                        <input type="checkbox" ${slot.enabled ? 'checked' : ''} onchange="updateScheduleSlot(${slot.id}, 'enabled', this.checked)" class="w-5 h-5 accent-brand-500 rounded">
+                        <input type="text" value="${slot.name}" onchange="updateScheduleSlot(${slot.id}, 'name', this.value)" class="bg-white dark:bg-slate-800 border border-pink-100 dark:border-slate-600 font-extrabold text-xs text-slate-800 dark:text-white px-3 py-1.5 rounded-xl flex-1 outline-none">
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input type="time" value="${slot.time}" onchange="updateScheduleSlot(${slot.id}, 'time', this.value)" class="bg-white dark:bg-slate-800 border border-pink-100 dark:border-slate-600 font-bold text-xs text-slate-800 dark:text-white px-2.5 py-1.5 rounded-xl outline-none">
+                        <button onclick="deleteScheduleSlot(${slot.id})" class="text-rose-600 hover:text-rose-800 p-2 text-xs">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function updateScheduleSlot(id, key, val) {
+            appState.schedule = appState.schedule.map(s => s.id === id ? { ...s, [key]: val } : s);
+            saveState();
+        }
+
+        function deleteScheduleSlot(id) {
+            showConfirmModal("Delete Reminder Slot?", "Remove this slot from daily schedule?", () => {
+                appState.schedule = appState.schedule.filter(s => s.id !== id);
+                saveState();
+            });
+        }
+
+        function addNewScheduleSlot() {
+            const newId = Date.now();
+            appState.schedule.push({
+                id: newId,
+                name: "Pengesahan Tambahan",
+                time: "14:00",
+                enabled: true,
+                note: "Custom Reminder Slot"
+            });
+            saveState();
+        }
+
+        function promptRestoreSchedule() {
+            showConfirmModal("Restore Default Schedule?", "This will reset all daily reminder slots to official SPOT-Me times.", () => {
+                appState.schedule = JSON.parse(JSON.stringify(DEFAULT_SCHEDULE));
+                saveState();
+                showToast("Schedule restored to defaults.", "info");
+            });
+        }
+
+        function renderHolidaysList() {
+            const container = document.getElementById('holidays-list-container');
+            if (!container) return;
+            container.innerHTML = '';
+
+            appState.holidays.forEach(h => {
+                const item = document.createElement('div');
+                item.className = "p-3 bg-pink-50/30 dark:bg-slate-800/60 rounded-xl border border-pink-100/60 dark:border-slate-700 flex items-center justify-between text-xs";
+                const linkUrl = h.link || "https://www.kabinet.gov.my";
+
+                item.innerHTML = `
+                    <div>
+                        <div class="font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                            <span>${h.name}</span>
+                            <a href="${linkUrl}" target="_blank" class="text-[10px] text-brand-600 dark:text-brand-300 underline font-normal flex items-center gap-1 hover:text-brand-800">
+                                <span>Verify</span>
+                                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            </a>
+                        </div>
+                        <div class="text-[10px] text-slate-500 font-mono">${h.date}</div>
+                    </div>
+                    <button onclick="deleteHoliday('${h.id}')" class="text-rose-600 hover:text-rose-800 p-1.5">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function addHoliday() {
+            const nameEl = document.getElementById('holiday-name-input');
+            const dateEl = document.getElementById('holiday-date-input');
+            if (!nameEl || !dateEl) return;
+            const name = nameEl.value;
+            const date = dateEl.value;
+            if (!name || !date) return;
+
+            appState.holidays.push({ id: "h_" + Date.now(), name, date, link: "https://www.kabinet.gov.my" });
+            nameEl.value = '';
+            dateEl.value = '';
+            saveState();
+            showToast(`Added holiday: ${name}`, "success");
+        }
+
+        function deleteHoliday(id) {
+            appState.holidays = appState.holidays.filter(h => h.id !== id);
+            saveState();
+        }
+
+        function saveHolidaySettings() {
+            const exWeekends = document.getElementById('exclude-weekends-toggle');
+            const exHolidays = document.getElementById('exclude-holidays-toggle');
+            if (exWeekends) appState.settings.excludeWeekends = exWeekends.checked;
+            if (exHolidays) appState.settings.excludeHolidays = exHolidays.checked;
+            saveState();
+        }
+
+        function logHistory(reminderName, action, details) {
+            const now = new Date();
+            appState.history.unshift({
+                id: "log_" + Date.now(),
+                date: getTodayStr(),
+                time: `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`,
+                reminder: reminderName,
+                action: action,
+                details: details
+            });
+            saveState();
+        }
+
+        function renderHistoryLog() {
+            const container = document.getElementById('history-log-container');
+            if (!container) return;
+            container.innerHTML = '';
+            const filterEl = document.getElementById('history-filter-select');
+            const filter = filterEl ? filterEl.value : 'ALL';
+
+            const filtered = appState.history.filter(log => {
+                if (filter === "ALL") return true;
+                return log.action === filter;
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="text-center py-6 text-slate-400 text-xs italic">No history records found.</div>';
+                return;
+            }
+
+            filtered.forEach(log => {
+                const entry = document.createElement('div');
+                entry.className = "p-3 bg-pink-50/30 dark:bg-slate-800/60 rounded-xl border border-pink-100/60 dark:border-slate-700 flex items-center justify-between text-xs";
+                
+                let badgeClass = "bg-slate-200 text-slate-700";
+                if (log.action === "DONE") badgeClass = "bg-pastel-mint text-pastel-mintText dark:bg-emerald-900 dark:text-emerald-300";
+                if (log.action === "OPENED_SPOTME") badgeClass = "bg-pastel-lavender text-pastel-lavenderText dark:bg-brand-900 dark:text-brand-300";
+
+                entry.innerHTML = `
+                    <div>
+                        <div class="font-bold text-slate-800 dark:text-white">${log.reminder}</div>
+                        <div class="text-[10px] text-slate-500">${log.date} at ${log.time} • ${log.details}</div>
+                    </div>
+                    <span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full ${badgeClass}">
+                        ${log.action}
+                    </span>
+                `;
+                container.appendChild(entry);
+            });
+        }
+
+        function promptClearHistory() {
+            showConfirmModal("Clear History Logs?", "Delete all check-in history records?", () => {
+                appState.history = [];
+                saveState();
+                showToast("History cleared.", "info");
+            });
+        }
+
+        function exportHistoryCSV() {
+            if (appState.history.length === 0) {
+                showToast("No history available to export.", "error");
+                return;
+            }
+            let csv = "Date,Time,Reminder,Action,Details\n";
+            appState.history.forEach(row => {
+                csv += `"${row.date}","${row.time}","${row.reminder}","${row.action}","${row.details}"\n`;
+            });
+
+            const blob = new Blob([csv], { type: "text/csv" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `SPOT-Me_History_${getTodayStr()}.csv`;
+            link.click();
+        }
+
+        function saveAppSettings() {
+            const urlEl = document.getElementById('setting-spotme-url');
+            const earlyEl = document.getElementById('setting-early-interval');
+            const followEl = document.getElementById('setting-followup-interval');
+            const soundEl = document.getElementById('setting-sound-type');
+
+            if (urlEl) appState.settings.spotMeUrl = urlEl.value;
+            if (earlyEl) appState.settings.earlyInterval = parseInt(earlyEl.value);
+            if (followEl) appState.settings.followupInterval = parseInt(followEl.value);
+            if (soundEl) appState.settings.soundType = soundEl.value;
+            saveState();
+            showToast("Settings saved successfully!", "success");
+        }
+
+        function promptResetAppData() {
+            showConfirmModal("Reset App Data?", "This will restore all settings, schedule, and history to defaults.", () => {
+                localStorage.removeItem('SPOTME_APP_STATE');
+                location.reload();
+            });
+        }
+
+        function openSpotMePortal() {
+            const url = appState.settings.spotMeUrl || "https://spotme.jdn.gov.my/dashboard/pegawai";
+            window.open(url, '_blank');
+        }
+
+        function openSpotMePortalLog() {
+            logHistory("SPOT-Me Portal", "OPENED_SPOTME", "Opened portal from App button");
+            openSpotMePortal();
+        }
+
+        function testSpotMeUrl() {
+            openSpotMePortal();
+        }
+
+        function playChimeSound() {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+
+                if (!globalAudioCtx) {
+                    globalAudioCtx = new AudioContext();
+                }
+
+                if (globalAudioCtx.state === 'suspended') {
+                    globalAudioCtx.resume();
+                }
+
+                const ctx = globalAudioCtx;
+                const now = ctx.currentTime;
+
+                const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51];
+                notes.forEach((freq, idx) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                    gain.gain.setValueAtTime(0.3, now + idx * 0.12);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.45);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now + idx * 0.12);
+                    osc.stop(now + idx * 0.12 + 0.45);
+                });
+            } catch(e) {
+                const fallback = document.getElementById('audio-chime-fallback');
+                if (fallback) fallback.play().catch(()=>{});
+            }
+        }
+
+        function speakVoiceGreeting(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance(text);
+                utter.rate = 1.0;
+                utter.pitch = 1.1;
+                window.speechSynthesis.speak(utter);
+            }
+        }
+
+        function testNotificationSound() {
+            unlockAudioEngineOnce();
+            const soundEl = document.getElementById('setting-sound-type');
+            const soundType = soundEl ? soundEl.value : 'CHIME_VOICE';
+            if (soundType.includes('CHIME')) playChimeSound();
+            if (soundType.includes('VOICE')) {
+                setTimeout(() => {
+                    speakVoiceGreeting("Attention! Time for your SPOT-Me check-in.");
+                }, 600);
+            }
+            if ('vibrate' in navigator) {
+                navigator.vibrate([200, 100, 200]);
+            }
+        }
+
+        function checkNotificationPermissions() {
+            if ('Notification' in window) {
+                const title = document.getElementById('audio-status-title');
+                const sub = document.getElementById('audio-status-sub');
+                if (Notification.permission === 'granted') {
+                    if (title) title.innerText = "Push Alerts & Audio Enabled ✓";
+                    if (sub) sub.innerText = "Ready to sound alarms at scheduled slots.";
+                }
+            }
+        }
+
+        function requestNotificationPermission() {
+            unlockAudioEngineOnce();
+            if ('Notification' in window) {
+                Notification.requestPermission().then(permission => {
+                    checkNotificationPermissions();
+                    if (permission === 'granted') {
+                        testNotificationSound();
+                        showToast("Notifications enabled!", "success");
+                    }
+                });
+            }
+        }
+
+        let triggeredMap = new Set();
+
+        function startClockAndAlarmLoop() {
+            setInterval(() => {
+                const now = new Date();
+                const todayStr = getTodayStr();
+
+                updateNextReminderCard();
+
+                if (!appState.wfhDates.includes(todayStr)) return;
+
+                const currentHHMM = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+
+                appState.schedule.forEach(slot => {
+                    if (!slot.enabled) return;
+
+                    const slotKey = `${todayStr}_${slot.id}`;
+                    if (appState.acknowledgedSlots[slotKey]) return;
+
+                    if (slot.time === currentHHMM && !triggeredMap.has(slotKey)) {
+                        triggeredMap.add(slotKey);
+                        triggerNotificationAlert(slot, slotKey);
+                    }
+                });
+
+            }, 1000);
+        }
+
+        function triggerNotificationAlert(slot, slotKey) {
+            activeAlarmSlotKey = slotKey;
+
+            if ('vibrate' in navigator) {
+                navigator.vibrate([500, 250, 500, 250, 800]);
+            }
+
+            const alarmBanner = document.getElementById('active-alarm-banner');
+            const alarmTitle = document.getElementById('alarm-banner-title');
+            const alarmTime = document.getElementById('alarm-banner-time');
+
+            if (alarmTitle) alarmTitle.innerText = slot.name;
+            if (alarmTime) alarmTime.innerText = `Scheduled for ${formatTimeDisplay(slot.time)}`;
+            if (alarmBanner) alarmBanner.classList.remove('hidden');
+
+            const soundType = appState.settings.soundType;
+
+            playChimeSound();
+            if (soundType.includes('VOICE')) {
+                speakVoiceGreeting(`Time for your SPOT-Me ${slot.name} check-in!`);
+            }
+
+            if (alarmLoopInterval) clearInterval(alarmLoopInterval);
+            alarmLoopInterval = setInterval(() => {
+                if (activeAlarmSlotKey) {
+                    if (soundType.includes('CHIME')) playChimeSound();
+                } else {
+                    clearInterval(alarmLoopInterval);
+                }
+            }, 4000);
+
+            if ('Notification' in window && Notification.permission === 'granted') {
+                const notif = new Notification(`🏠 SPOT-Me: ${slot.name}`, {
+                    body: `Time to verify your SPOT-Me attendance (${slot.note}).`,
+                    icon: 'https://cdn-icons-png.flaticon.com/512/888/888857.png',
+                    requireInteraction: true
+                });
+
+                notif.onclick = function() {
+                    stopAlarmRinging();
+                    openSpotMePortalLog();
+                    notif.close();
+                };
+            }
+        }
+
+        function stopAlarmRinging() {
+            activeAlarmSlotKey = null;
+            if (alarmLoopInterval) clearInterval(alarmLoopInterval);
+            const alarmBanner = document.getElementById('active-alarm-banner');
+            if (alarmBanner) alarmBanner.classList.add('hidden');
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        }
+
+        function acknowledgeActiveAlarm() {
+            if (activeAlarmSlotKey) {
+                appState.acknowledgedSlots[activeAlarmSlotKey] = true;
+                saveState();
+                showToast("Check-in marked as Done!", "success");
+            }
+            stopAlarmRinging();
+        }
+
+        async function connectCloudSyncCode(customCode, isSilent = false) {
+            const codeInput = document.getElementById('cloud-sync-code-input');
+            const targetCode = customCode || (codeInput ? codeInput.value.trim().toUpperCase() : "");
+
+            if (!targetCode) {
+                if (!isSilent) showToast("Please enter a Sync Code or tap 'Create New Code'.", "error");
+                return;
+            }
+
+            // PERMANENT PERSISTENCE: Immediately store target code in state & localStorage
+            appState.syncCode = targetCode;
+
+            if (!appState.recentCodes) appState.recentCodes = [];
+            if (!appState.recentCodes.includes(targetCode)) {
+                appState.recentCodes.unshift(targetCode);
+                appState.recentCodes = appState.recentCodes.slice(0, 5); // Keep last 5
+            }
+
+            localStorage.setItem('SPOTME_APP_STATE', JSON.stringify(appState));
+
+            if (codeInput) codeInput.value = targetCode;
+
+            updateCloudUIStatus("connecting", targetCode);
+
+            if (window.firebaseReadyPromise) {
+                await Promise.race([
+                    window.firebaseReadyPromise,
+                    new Promise(resolve => setTimeout(resolve, 1500))
+                ]);
+            }
+
+            // Engine 1: Firestore Real-Time Listener
+            if (window.firebaseDb && window.firebaseAppId && window.firestoreOnSnapshot) {
+                try {
+                    if (unsubscribeSyncListener) unsubscribeSyncListener();
+
+                    const docRef = window.firestoreDoc(window.firebaseDb, 'artifacts', window.firebaseAppId, 'public', 'data', 'sync_buckets', targetCode);
+
+                    unsubscribeSyncListener = window.firestoreOnSnapshot(docRef, (snapshot) => {
+                        if (snapshot.exists()) {
+                            const cloudData = snapshot.data();
+                            if (cloudData) {
+                                mergeRemoteState(cloudData);
+                            }
+                        } else {
+                            pushStateToCloud();
+                        }
+
+                        const nowStr = new Date().toLocaleTimeString();
+                        appState.settings.lastSyncTime = nowStr;
+                        updateCloudUIStatus("connected", targetCode, nowStr);
+                        if (!isSilent) showToast(`Connected to Bucket [${targetCode}]`, "success");
+                    }, (err) => {
+                        console.error("Firestore sync error, switching to Cloud Relay:", err);
+                        setupCloudRelayFallback(targetCode, isSilent);
+                    });
+
+                    return;
+                } catch(e) {
+                    console.warn("Firestore listener setup error:", e);
+                }
+            }
+
+            // Engine 2: REST Relay Fallback
+            setupCloudRelayFallback(targetCode, isSilent);
+        }
+
+        async function setupCloudRelayFallback(targetCode, isSilent) {
+            if (fallbackPollTimer) clearInterval(fallbackPollTimer);
+
+            const pollRelay = async () => {
+                try {
+                    const res = await fetch(`https://jsonblob.com/api/jsonBlob/${targetCode}`, {
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    if (res.ok) {
+                        const cloudData = await res.json();
+                        if (cloudData) {
+                            mergeRemoteState(cloudData);
+                        }
+                    }
+                } catch(e) {
+                    console.warn("Relay sync check note:", e);
+                }
+            };
+
+            await pollRelay();
+            fallbackPollTimer = setInterval(pollRelay, 3000);
+
+            const nowStr = new Date().toLocaleTimeString();
+            updateCloudUIStatus("connected", targetCode, nowStr);
+            if (!isSilent) showToast(`Connected to Bucket [${targetCode}]`, "success");
+        }
+
+        async function pushStateToCloud() {
+            if (!appState.syncCode) return;
+
+            const nowStr = new Date().toLocaleTimeString();
+            appState.settings.lastSyncTime = nowStr;
+
+            if (window.firebaseDb && window.firebaseAppId && window.firestoreSetDoc) {
+                try {
+                    const docRef = window.firestoreDoc(window.firebaseDb, 'artifacts', window.firebaseAppId, 'public', 'data', 'sync_buckets', appState.syncCode);
+                    await window.firestoreSetDoc(docRef, appState, { merge: true });
+                    updateCloudUIStatus("connected", appState.syncCode, nowStr);
+                    return;
+                } catch (e) {
+                    console.error("Firestore push error:", e);
+                }
+            }
+
+            try {
+                await fetch(`https://jsonblob.com/api/jsonBlob/${appState.syncCode}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(appState)
+                });
+                updateCloudUIStatus("connected", appState.syncCode, nowStr);
+            } catch(e) {
+                console.warn("Relay push error:", e);
+            }
+        }
+
+        function renderRecentCodes() {
+            const container = document.getElementById('recent-codes-container');
+            const pillsBox = document.getElementById('recent-codes-pills');
+            if (!container || !pillsBox) return;
+
+            const list = (appState.recentCodes || []).filter(c => c !== appState.syncCode);
+            if (list.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+
+            container.classList.remove('hidden');
+            pillsBox.innerHTML = '';
+
+            list.forEach(code => {
+                const btn = document.createElement('button');
+                btn.onclick = () => connectCloudSyncCode(code);
+                btn.className = "px-2.5 py-1 bg-brand-900/80 hover:bg-brand-800 text-pink-200 rounded-lg text-[10px] font-mono border border-brand-700/60 transition flex items-center gap-1";
+                btn.innerHTML = `
+                    <i class="fa-solid fa-arrows-rotate text-[9px]"></i>
+                    <span>${code}</span>
+                `;
+                pillsBox.appendChild(btn);
+            });
+        }
+
+        function generateNewSyncCode() {
+            const newCode = "SPOT-" + Math.floor(1000 + Math.random() * 9000);
+            const input = document.getElementById('cloud-sync-code-input');
+            if (input) input.value = newCode;
+            connectCloudSyncCode(newCode);
+        }
+
+        function promptUnpairDevice() {
+            showConfirmModal("Disconnect from Shared Code?", "This device will unpair from the current cloud code and generate a fresh code.", () => {
+                if (unsubscribeSyncListener) unsubscribeSyncListener();
+                if (fallbackPollTimer) clearInterval(fallbackPollTimer);
+                
+                const newCode = "SPOT-" + Math.floor(1000 + Math.random() * 9000);
+                appState.syncCode = newCode;
+                saveState();
+                connectCloudSyncCode(newCode);
+                showToast(`Disconnected. Assigned new code [${newCode}]`, "info");
+            });
+        }
+
+        function copySyncCodeToClipboard() {
+            const input = document.getElementById('cloud-sync-code-input');
+            if (input && input.value) {
+                const tempTextArea = document.createElement('textarea');
+                tempTextArea.value = input.value;
+                document.body.appendChild(tempTextArea);
+                tempTextArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempTextArea);
+                showToast(`Copied Sync Code [${input.value}] to clipboard!`, "success");
+            }
+        }
+
+        function updateCloudUIStatus(status, code, lastTime) {
+            const pill = document.getElementById('cloud-status-pill');
+            const headerText = document.getElementById('header-sync-text');
+            const headerIcon = document.getElementById('header-sync-icon');
+            const lastTimeEl = document.getElementById('cloud-last-time');
+
+            if (status === "connecting") {
+                if (pill) {
+                    pill.innerText = `● Connecting...`;
+                    pill.className = "text-[10px] font-black px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-700";
+                }
+                if (headerText) headerText.innerText = "Syncing...";
+                if (headerIcon) headerIcon.className = "fa-solid fa-arrows-rotate fa-spin text-xs text-amber-300";
+            } else if (status === "connected") {
+                if (pill) {
+                    pill.innerText = `● Connected: ${code}`;
+                    pill.className = "text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700";
+                }
+                if (headerText) headerText.innerText = `Sync: ${code}`;
+                if (headerIcon) headerIcon.className = "fa-solid fa-cloud text-xs text-emerald-300";
+                if (lastTimeEl) lastTimeEl.innerText = `Last Sync: ${lastTime || 'Just now'}`;
+            }
+        }
+
+        function exportNativeICS() {
+            if (appState.wfhDates.length === 0) {
+                showToast("Please toggle at least one WFH date first.", "error");
+                return;
+            }
+
+            let icsLines = [
+                "BEGIN:VCALENDAR",
+                "VERSION:2.0",
+                "PRODID:-//SPOT-Me WFH Reminder App//EN",
+                "CALSCALE:GREGORIAN",
+                "METHOD:PUBLISH"
+            ];
+
+            appState.wfhDates.forEach(dateStr => {
+                const formattedDate = dateStr.replace(/-/g, '');
+
+                appState.schedule.forEach(slot => {
+                    if (!slot.enabled) return;
+                    const [h, m] = slot.time.split(':');
+                    const startTimeStr = `${formattedDate}T${h}${m}00`;
+
+                    icsLines.push(
+                        "BEGIN:VEVENT",
+                        `UID:spotme-${formattedDate}-${slot.id}@reminder.app`,
+                        `SUMMARY:🏠 SPOT-Me: ${slot.name}`,
+                        `DESCRIPTION:SPOT-Me Attendance Check-in (${slot.note})`,
+                        `DTSTART;TZID=Asia/Kuala_Lumpur:${startTimeStr}`,
+                        `DTEND;TZID=Asia/Kuala_Lumpur:${formattedDate}T${h}${m}15`,
+                        "BEGIN:VALARM",
+                        "TRIGGER:-PT0M",
+                        "ACTION:DISPLAY",
+                        "DESCRIPTION:SPOT-Me Check-in Alarm",
+                        "END:VALARM",
+                        "END:VEVENT"
+                    );
+                });
+            });
+
+            icsLines.push("END:VCALENDAR");
+            const icsData = icsLines.join("\r\n");
+
+            const blob = new Blob([icsData], { type: "text/calendar;charset=utf-8" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute('download', `SPOT-Me_WFH_Alarms.ics`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast("Calendar alarms exported! Import to your phone calendar.", "success");
+        }
+
+        function toggleDarkMode() {
+            appState.settings.darkMode = !appState.settings.darkMode;
+            applyDarkMode();
+            saveState();
+        }
+
+        function applyDarkMode() {
+            const isDark = Boolean(appState.settings.darkMode);
+            const darkIcon = document.getElementById('dark-icon');
+            
+            if (isDark) {
+                document.documentElement.classList.add('dark');
+                document.body.classList.add('dark');
+                if (darkIcon) darkIcon.className = "fa-solid fa-sun text-amber-300 text-base";
+            } else {
+                document.documentElement.classList.remove('dark');
+                document.body.classList.remove('dark');
+                if (darkIcon) darkIcon.className = "fa-solid fa-moon text-brand-100 text-base";
+            }
+        }
+
+        function openDriveHelpModal() {
+            const modal = document.getElementById('drive-help-modal');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeDriveHelpModal() {
+            const modal = document.getElementById('drive-help-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function formatTimeDisplay(time24) {
+            let [h, m] = time24.split(':').map(Number);
+            let period = h >= 12 ? 'PM' : 'AM';
+            let displayH = h % 12 || 12;
+            return `${displayH}:${m.toString().padStart(2,'0')} ${period}`;
+        }
+    </script>
+</body>
+</html>
